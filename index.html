@@ -220,7 +220,6 @@
                         <option value="css">.CSS (Hojas de Estilo)</option>
                         <option value="sh">.SH (Script Bash Linux)</option>
                         <option value="bat">.BAT (Script Batch Windows)</option>
-                        <!-- NUEVAS EXTENSIONES AGREGADAS AQUÍ -->
                         <option value="psc">.PSC (Pseudocódigo PSeInt)</option>
                         <option value="java">.JAVA (Código Java)</option>
                         <option value="cpp">.CPP (Código C++)</option>
@@ -278,15 +277,41 @@
             lineCountDisplay.textContent = lines;
         }
 
+        // --- SISTEMA INTELIGENTE DE DETECCIÓN DE CARACTERES ---
+        async function decodificarTexto(archivo) {
+            const arrayBuffer = await archivo.arrayBuffer();
+            let textoDecodificado = "";
+            try {
+                // Intento 1: Leer como UTF-8 estricto (fatal: true hace que falle si hay caracteres extraños)
+                const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+                textoDecodificado = utf8Decoder.decode(arrayBuffer);
+            } catch (e) {
+                // Intento 2: Si falla el UTF-8, usamos Windows-1252 (ANSI) que soporta tildes y ñ correctamente
+                const ansiDecoder = new TextDecoder('windows-1252');
+                textoDecodificado = ansiDecoder.decode(arrayBuffer);
+            }
+            return textoDecodificado;
+        }
+
         btnOpen.addEventListener('click', async () => {
+            const currentExt = formatSelect.value;
+            
             if ('showOpenFilePicker' in window) {
                 try {
-                    const [handle] = await window.showOpenFilePicker();
+                    const options = {
+                        types: [{
+                            description: `Archivo .${currentExt.toUpperCase()}`,
+                            accept: { '*/*': [`.${currentExt}`] }
+                        }],
+                        excludeAcceptAllOption: false 
+                    };
+                    
+                    const [handle] = await window.showOpenFilePicker(options);
                     currentFileHandle = handle;
                     const file = await handle.getFile();
-                    const text = await file.text();
                     
-                    editor.value = text;
+                    // Usar decodificador inteligente
+                    editor.value = await decodificarTexto(file);
                     
                     const lastDot = file.name.lastIndexOf('.');
                     const name = lastDot !== -1 ? file.name.substring(0, lastDot) : file.name;
@@ -296,8 +321,6 @@
                     
                     if (document.querySelector(`#formatSelect option[value="${ext}"]`)) {
                         formatSelect.value = ext;
-                    } else {
-                        formatSelect.value = 'txt';
                     }
                     
                     updateStats();
@@ -308,19 +331,20 @@
                     }
                 }
             } else {
+                fileInput.accept = `.${currentExt}`;
                 fileInput.click();
             }
         });
 
-        fileInput.addEventListener('change', (e) => {
+        fileInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
 
             currentFileHandle = null; 
-            const reader = new FileReader();
             
-            reader.onload = function(evt) {
-                editor.value = evt.target.result;
+            try {
+                // Usar decodificador inteligente también en móviles y navegadores antiguos
+                editor.value = await decodificarTexto(file);
                 
                 const lastDot = file.name.lastIndexOf('.');
                 const name = lastDot !== -1 ? file.name.substring(0, lastDot) : file.name;
@@ -330,20 +354,14 @@
                 
                 if (document.querySelector(`#formatSelect option[value="${ext}"]`)) {
                     formatSelect.value = ext;
-                } else {
-                    formatSelect.value = 'txt';
                 }
                 
                 updateStats();
                 showStatus('Archivo cargado correctamente');
                 fileInput.value = ''; 
-            };
-            
-            reader.onerror = function() {
+            } catch (error) {
                 showStatus('Error al leer el archivo', true);
-            };
-
-            reader.readAsText(file, 'UTF-8');
+            }
         });
 
         btnCopy.addEventListener('click', async () => {
@@ -479,7 +497,12 @@
         });
 
         function downloadBlob(content, filename, mimeType) {
-            const blob = new Blob([content], { type: mimeType });
+            let finalMimeType = mimeType;
+            if (typeof content === 'string' && !finalMimeType.includes('charset=')) {
+                finalMimeType += ';charset=utf-8';
+            }
+            
+            const blob = new Blob([content], { type: finalMimeType });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -513,13 +536,19 @@
                 'css': 'text/css',
                 'sh': 'application/x-sh',
                 'bat': 'application/x-bat',
-                // NUEVAS EXTENSIONES AGREGADAS AQUÍ
                 'psc': 'text/plain',
                 'java': 'text/x-java-source',
                 'cpp': 'text/x-c',
                 'php': 'application/x-httpd-php'
             };
-            downloadBlob(text, filename, mimeTypes[format] || 'text/plain');
+            
+            let mime = mimeTypes[format] || 'text/plain';
+            
+            if (mime === 'text/plain' && !['txt', 'log', 'env', 'ini', 'conf'].includes(format)) {
+                mime = 'application/octet-stream';
+            }
+            
+            downloadBlob(text, filename, mime);
         }
 
         function exportHTML(text, filename) {
